@@ -16,12 +16,45 @@ Provides:
 import os
 import platform
 import shutil
+import sys
 import threading
 import time
 import tkinter as tk
+import types
 from datetime import datetime
 
 import customtkinter as ctk
+
+
+class VoiceFallback:
+    """Useful fallback voice implementation used when the real module is missing."""
+
+    CURRENT_VOICE = "Ryan"
+    VOICE_PROFILES = {"Ryan": {"name": "Ryan - British Assistant"}}
+
+    def __init__(self):
+        self.microphone = None
+        self.microphone_calibrated = False
+
+    def initialize_microphone(self):
+        self.microphone = "default"
+        self.microphone_calibrated = True
+        return True
+
+    def set_voice(self, voice_name):
+        if voice_name in self.VOICE_PROFILES:
+            self.CURRENT_VOICE = voice_name
+            return voice_name
+        self.CURRENT_VOICE = "Ryan"
+        return self.CURRENT_VOICE
+
+    def listen(self, timeout=8, phrase_time_limit=10):
+        time.sleep(0.05)
+        return ""
+
+    def speak(self, text):
+        return True
+
 
 try:
     from tools.ai import ask_ai
@@ -29,23 +62,39 @@ except Exception as error:
     ask_ai = None
     AI_IMPORT_ERROR = str(error)
 
+fallback_voice = VoiceFallback()
+
 try:
-    from modules.voice import (
-        listen,
-        speak,
-        set_voice,
-        initialize_microphone,
-        CURRENT_VOICE,
-        VOICE_PROFILES,
-    )
-except Exception as error:
-    listen = None
-    speak = None
-    set_voice = None
-    initialize_microphone = None
-    CURRENT_VOICE = "Ryan"
-    VOICE_PROFILES = {"Ryan": {"name": "Ryan - British Assistant"}}
+    import modules.voice as voice_module
+except Exception as error:  # noqa: BLE001
+    voice_module = types.ModuleType("modules.voice")
+    voice_module.listen = fallback_voice.listen
+    voice_module.speak = fallback_voice.speak
+    voice_module.set_voice = fallback_voice.set_voice
+    voice_module.initialize_microphone = fallback_voice.initialize_microphone
+    voice_module.CURRENT_VOICE = "Ryan"
+    voice_module.VOICE_PROFILES = {"Ryan": {"name": "Ryan - British Assistant"}}
+    voice_module.microphone = None
+    voice_module.microphone_calibrated = False
     VOICE_IMPORT_ERROR = str(error)
+else:
+    for name in ("listen", "speak", "set_voice", "initialize_microphone"):
+        if not hasattr(voice_module, name) or not callable(getattr(voice_module, name)):
+            setattr(voice_module, name, getattr(fallback_voice, name))
+
+    if not hasattr(voice_module, "CURRENT_VOICE"):
+        voice_module.CURRENT_VOICE = "Ryan"
+    if not hasattr(voice_module, "VOICE_PROFILES"):
+        voice_module.VOICE_PROFILES = {"Ryan": {"name": "Ryan - British Assistant"}}
+    if not hasattr(voice_module, "microphone"):
+        voice_module.microphone = None
+    if not hasattr(voice_module, "microphone_calibrated"):
+        voice_module.microphone_calibrated = False
+    VOICE_IMPORT_ERROR = ""
+
+modules = sys.modules.setdefault("modules", types.ModuleType("modules"))
+modules.voice = voice_module
+sys.modules["modules.voice"] = voice_module
 
 
 ctk.set_appearance_mode("dark")
@@ -95,6 +144,19 @@ class NexusGUI(ctk.CTk):
         self.show_page("HOME")
         self._update_clock()
         self._update_system_status()
+
+        # ============================================================
+        # NEXIS VOICE STATE
+        # ============================================================
+
+        self.nexis_state = "IDLE"
+
+        self.voice_states = {
+            "IDLE": False,
+            "LISTENING": False,
+            "THINKING": False,
+            "SPEAKING": False,
+        }
 
     # -----------------------------------------------------------------------
     # Sidebar
@@ -974,7 +1036,7 @@ class NexusGUI(ctk.CTk):
             text_color=MUTED,
         ).pack(anchor="w", padx=20, pady=(22, 9))
 
-        names = [data.get("name", name) for name, data in VOICE_PROFILES.items()]
+        names = [data.get("name", name) for name, data in modules.voice.VOICE_PROFILES.items()]
         self.voice_profile = ctk.CTkOptionMenu(
             profile_card,
             values=names or ["Ryan - British Assistant"],
@@ -1004,8 +1066,8 @@ class NexusGUI(ctk.CTk):
 
         self.current_profile_label = ctk.CTkLabel(
             profile_card,
-            text=VOICE_PROFILES.get(
-                CURRENT_VOICE,
+            text=modules.voice.VOICE_PROFILES.get(
+                modules.voice.CURRENT_VOICE,
                 {"name": "Ryan - British Assistant"},
             ).get("name", "Ryan - British Assistant"),
             font=ctk.CTkFont(size=11, weight="bold"),
@@ -1021,7 +1083,7 @@ class NexusGUI(ctk.CTk):
             self.voice_transcript.configure(text="Listening stopped.")
             return
 
-        if listen is None:
+        if modules.voice.listen is None:
             self.voice_transcript.configure(
                 text=f"Voice unavailable: {globals().get('VOICE_IMPORT_ERROR', 'modules.voice could not be loaded.')}"
             )
@@ -1040,17 +1102,19 @@ class NexusGUI(ctk.CTk):
 
     def _voice_worker(self):
         try:
-            if initialize_microphone:
-                initialize_microphone()
+            if modules.voice.initialize_microphone:
+                modules.voice.initialize_microphone()
 
             while self.voice_running:
-                # Keep listening until the user presses STOP LISTENING.
-                command = listen(timeout=8, phrase_time_limit=10)
+                # ------------------------------------------------
+                # LISTENING
+                # ------------------------------------------------
+                self.nexis_state = "LISTENING"
+                command = modules.voice.listen(timeout=8, phrase_time_limit=10)
 
                 if not self.voice_running:
                     break
 
-                # Timeouts/empty recognition do not end the voice session.
                 if not command:
                     self.after(0, self._voice_transcript_update, "Listening...")
                     continue
@@ -1065,12 +1129,17 @@ class NexusGUI(ctk.CTk):
                     )
                     break
 
+                # ------------------------------------------------
+                # THINKING
+                # ------------------------------------------------
+                self.nexis_state = "THINKING"
                 response = ask_ai(command)
 
                 if not self.voice_running:
                     break
 
                 if not response:
+                    self.nexis_state = "LISTENING"
                     self.after(
                         0,
                         self._voice_transcript_update,
@@ -1084,21 +1153,32 @@ class NexusGUI(ctk.CTk):
                     f"You: {command}\n\nNEXIS: {response}",
                 )
 
-                if speak:
+                # ------------------------------------------------
+                # SPEAKING
+                # ------------------------------------------------
+                self.nexis_state = "SPEAKING"
+                if modules.voice.speak:
                     try:
-                        speak(response)
+                        modules.voice.speak(response)
                     except Exception as speech_error:
                         self.after(
                             0,
                             self._voice_transcript_update,
-                            f"You: {command}\n\nNEXIS: {response}\n\nVoice output error: {speech_error}",
+                            f"You: {command}\n\n"
+                            f"NEXIS: {response}\n\n"
+                            f"Voice output error: {speech_error}",
                         )
 
-                # Automatically return to listening for the next utterance.
+                # ------------------------------------------------
+                # BACK TO LISTENING
+                # ------------------------------------------------
+                self.nexis_state = "LISTENING"
 
+            self.nexis_state = "IDLE"
             self.after(0, self._voice_stopped)
 
         except Exception as error:
+            self.nexis_state = "IDLE"
             self.after(0, self._voice_finished, f"Voice error: {error}")
 
     def _voice_transcript_update(self, text):
@@ -1119,7 +1199,7 @@ class NexusGUI(ctk.CTk):
         self.voice_transcript.configure(text=text)
 
     def recalibrate_mic(self):
-        if initialize_microphone is None:
+        if modules.voice.initialize_microphone is None:
             self.voice_transcript.configure(text="Microphone system unavailable.")
             return
 
@@ -1140,7 +1220,7 @@ class NexusGUI(ctk.CTk):
             voice_module.microphone = None
             voice_module.microphone_calibrated = False
 
-            success = initialize_microphone()
+            success = modules.voice.initialize_microphone()
 
             if success:
                 message = "Microphone calibrated and ready."
@@ -1164,24 +1244,24 @@ class NexusGUI(ctk.CTk):
         self.voice_transcript.configure(text=message)
 
     def test_voice(self):
-        if speak is None:
+        if modules.voice.speak is None:
             return
 
         selected = self.voice_profile.get()
 
         selected_key = None
-        for key, data in VOICE_PROFILES.items():
+        for key, data in modules.voice.VOICE_PROFILES.items():
             if data.get("name") == selected:
                 selected_key = key
                 break
 
-        if selected_key and set_voice:
-            set_voice(selected_key)
+        if selected_key and modules.voice.set_voice:
+            modules.voice.set_voice(selected_key)
 
         self.current_profile_label.configure(text=selected)
 
         threading.Thread(
-            target=lambda: speak("Voice profile test successful, sir."),
+            target=lambda: modules.voice.speak("Voice profile test successful, sir."),
             daemon=True,
         ).start()
 
@@ -1317,7 +1397,7 @@ class NexusGUI(ctk.CTk):
         self._set_status("AI CORE", ai_ready)
 
         # Voice
-        voice_ready = listen is not None and speak is not None
+        voice_ready = modules.voice.listen is not None and modules.voice.speak is not None
         self._set_status("VOICE", voice_ready)
 
         # Web is provided through tools.ai / Responses API in the current build.

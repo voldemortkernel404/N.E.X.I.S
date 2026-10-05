@@ -15,6 +15,7 @@ from openai import OpenAI
 
 from tools.memory import add_message, get_history
 from tools.router import run_action
+from tools.fast_router import route
 
 
 # ============================================================
@@ -433,8 +434,7 @@ def handle_direct_computer_command(prompt):
 
         # Don't steal web requests.
         if (
-            target.startswith("http://")
-            or target.startswith("https://")
+            target.startswith(("http://", "https://"))
             or "." in target and " " not in target
         ):
             return None
@@ -496,7 +496,7 @@ def execute_function_call(function_call):
         arguments = json.loads(
             function_call.arguments
         )
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         arguments = {}
 
     print(f"NEXIS ACTION: {action}")
@@ -525,29 +525,117 @@ def ask_ai(prompt):
     if not prompt:
         return "I didn't receive a question, sir."
 
+            # ====================================================
+        # FAST ROUTER
+        # ====================================================
+
+        routing = route(prompt)
+
+        print(f"NEXIS ROUTE: {routing}")
+
+        if routing["route"] == "action":
+
+            intent = routing.get("intent")
+            target = routing.get("target")
+
+            if intent == "launch_application":
+
+                result = run_action(
+                    "launch_application",
+                    {
+                        "application": target
+                    }
+                )
+
+                add_message("user", prompt)
+                add_message("assistant", str(result))
+
+                return str(result)
+
+            if intent == "terminate_process":
+
+                result = run_action(
+                    "terminate_process",
+                    {
+                        "name": target
+                    }
+                )
+
+                add_message("user", prompt)
+                add_message("assistant", str(result))
+
+                return str(result)
+
+            if intent == "find_process":
+
+                result = run_action(
+                    "find_process",
+                    {
+                        "name": target
+                    }
+                )
+
+                add_message("user", prompt)
+                add_message("assistant", str(result))
+
+                return str(result)
+
     try:
 
         # ====================================================
-        # DIRECT COMPUTER COMMANDS
+        # FAST ROUTER
         # ====================================================
 
-        direct_result = handle_direct_computer_command(
-            prompt
-        )
+        routing = route(prompt)
 
-        if direct_result is not None:
+        print(f"NEXIS ROUTE: {routing}")
 
-            add_message(
-                "user",
-                prompt
-            )
+        if routing["route"] == "action":
 
-            add_message(
-                "assistant",
-                direct_result
-            )
+            intent = routing.get("intent")
+            target = routing.get("target")
 
-            return direct_result
+            if intent == "launch_application":
+
+                result = run_action(
+                    "launch_application",
+                    {
+                        "application": target
+                    }
+                )
+
+                add_message("user", prompt)
+                add_message("assistant", str(result))
+
+                return str(result)
+
+            if intent == "terminate_process":
+
+                result = run_action(
+                    "terminate_process",
+                    {
+                        "name": target
+                    }
+                )
+
+                add_message("user", prompt)
+                add_message("assistant", str(result))
+
+                return str(result)
+
+            if intent == "find_process":
+
+                result = run_action(
+                    "find_process",
+                    {
+                        "name": target
+                    }
+                )
+
+                add_message("user", prompt)
+                add_message("assistant", str(result))
+
+                return str(result)
 
         # ====================================================
         # MEMORY

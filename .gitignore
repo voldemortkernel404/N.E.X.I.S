@@ -1,7 +1,12 @@
 .env
+.env.*
+!.env.example
 venv/
 __pycache__/
 *.pyc
 *.pyo
 *.log
-.vscode/
+.vscode/ 
+core/network/device_identity.json
+core/network/trusted_devices.json
+core/network/certs/

@@ -46,16 +46,14 @@ MICROPHONE_INDEX = 1
 # ============================================================
 
 recognizer = sr.Recognizer()
-
 recognizer.energy_threshold = 300
 recognizer.dynamic_energy_threshold = True
 recognizer.dynamic_energy_adjustment_damping = 0.15
-recognizer.dynamic_energy_adjustment_ratio = 1.5
+recognizer.dynamic_energy_ratio = 1.5
 
-recognizer.pause_threshold = 0.7
-recognizer.phrase_threshold = 0.25
-recognizer.non_speaking_duration = 0.4
-
+recognizer.pause_threshold = 0.55
+recognizer.phrase_threshold = 0.20
+recognizer.non_speaking_duration = 0.30
 
 # ============================================================
 # MICROPHONE STATE
@@ -473,7 +471,7 @@ def listen(
 
             result = recognizer.recognize_google(
                 audio,
-                language="en-US"
+                language="en-GB"
             )
 
         except sr.UnknownValueError:
